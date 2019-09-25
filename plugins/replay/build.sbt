@@ -1,6 +1,7 @@
 name := "forklift-replay"
 
 libraryDependencies ++= Seq(
+  "javax.inject" % "javax.inject" % "1",
   "org.elasticsearch" % "elasticsearch" % "2.4.1", // retained for now, to support embedded ES clusters
   "org.elasticsearch.client" % "rest" % "5.0.2",
   "com.fasterxml.jackson.core" % "jackson-databind" % "2.7.3",

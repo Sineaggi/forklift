@@ -24,7 +24,6 @@ import forklift.source.sources.GroupedTopicSource;
 import forklift.source.sources.QueueSource;
 import forklift.source.sources.RoleInputSource;
 import forklift.source.sources.TopicSource;
-import forklift.source.decorators.GroupedTopic;
 import forklift.source.decorators.Queue;
 import forklift.source.decorators.Topic;
 
@@ -61,7 +60,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import javax.inject.Inject;
 
 public class Consumer {
     static ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule())
@@ -85,6 +83,7 @@ public class Consumer {
     private List<SourceI> roleSources = Collections.emptyList();
     private List<ConsumerService> services;
     private Method orderMethod;
+    private final List<Class<? extends Annotation>> injectClasses;
 
     // If a queue can process multiple messages at a time we
     // use a thread pool to manage how much cpu load the queue can
@@ -165,6 +164,18 @@ public class Consumer {
 
         log = LoggerFactory.getLogger(Consumer.class);
 
+        injectClasses = new ArrayList<>();
+        try {
+            injectClasses.add((Class<? extends Annotation>) Class.forName("javax.inject.Inject"));
+        } catch (ClassNotFoundException | ClassCastException e) {
+            log.debug("Ignoring Inject class");
+        }
+        try {
+            injectClasses.add((Class<? extends Annotation>) Class.forName("org.springframework.beans.factory.annotation.Autowired"));
+        } catch (ClassNotFoundException | ClassCastException e) {
+            log.debug("Ignoring Autowired class");
+        }
+
         // Look for all methods that need to be called when a
         // message is received.
         onMessage = new ArrayList<>();
@@ -201,7 +212,9 @@ public class Consumer {
 
         injectFields = new HashMap<>();
         injectFields.put(Config.class, new HashMap<>());
-        injectFields.put(javax.inject.Inject.class, new HashMap<>());
+        for (Class<?> clazz : injectClasses) {
+            injectFields.put(clazz, new HashMap<>());
+        }
         injectFields.put(forklift.decorators.Message.class, new HashMap<>());
         injectFields.put(forklift.decorators.Headers.class, new HashMap<>());
         injectFields.put(forklift.decorators.Properties.class, new HashMap<>());
@@ -373,12 +386,22 @@ public class Consumer {
 
     private final void configureConstructorInjection() {
         Constructor<?>[] constructors = msgHandler.getDeclaredConstructors();
-        List<Constructor> injectableConstructors = Arrays.stream(constructors).filter(constructor -> constructor.isAnnotationPresent(Inject.class)).collect(Collectors.toList());
+        List<Constructor> injectableConstructors = Arrays.stream(constructors)
+                .filter(constructor -> injectClasses.stream().anyMatch(constructor::isAnnotationPresent))
+                .collect(Collectors.toList());
         if (injectableConstructors.size() > 0) {
             this.constructor = injectableConstructors.get(0);
             this.constructorAnnotations = this.constructor.getParameterAnnotations();
             if (injectableConstructors.size() > 1) {
                 log.error("Multiple constructors annotated with Inject.  Using first injectable constructor found");
+            }
+        } else {
+            if (constructors.length > 0) {
+                this.constructor = constructors[0];
+                this.constructorAnnotations = this.constructor.getParameterAnnotations();
+                if (constructors.length > 1) {
+                    log.error("Multiple constructors.  Using first constructor found");
+                }
             }
         }
     }
@@ -423,7 +446,7 @@ public class Consumer {
     }
 
     private Object constructMessageHandlerInstance(ForkliftMessage forkliftMessage, List<Closeable> closeables) throws IllegalAccessException, InvocationTargetException, InstantiationException, IOException {
-        Object instance = null;
+        Object instance;
         if (this.constructor != null) {
             Object[] constructorParameters = buildConstructorParameters(forkliftMessage, closeables);
             instance = this.constructor.newInstance(constructorParameters);
@@ -447,7 +470,7 @@ public class Consumer {
             Parameter p = constructor.getParameters()[index];
             Object value = getInjectableValue(injectable, null, p.getType(), forkliftMessage);
             parameters[index] = value;
-            if (value != null && value instanceof ForkliftProducerI) {
+            if (value instanceof ForkliftProducerI) {
                 closeables.add((ForkliftProducerI)value);
             }
 
@@ -458,7 +481,7 @@ public class Consumer {
 
     private Object getInjectableValue(Annotation decorator, String mappedName, Class<?> mappedClass, ForkliftMessage msg) throws IOException {
         Object value = null;
-        if (decorator == null || decorator.annotationType() == javax.inject.Inject.class) {
+        if (decorator == null || injectClasses.contains(decorator.annotationType())) {
             if (this.services != null) {
                 // Try to resolve the class from any available BeanResolvers.
                 for (ConsumerService s : this.services) {

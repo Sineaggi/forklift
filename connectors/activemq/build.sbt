@@ -9,6 +9,7 @@ libraryDependencies ++= Seq(
 )
 
 lazy val testDependencies = Seq(
+  "javax.inject" % "javax.inject" % "1",
   "commons-io" % "commons-io" % "2.4",
   "com.novocode" % "junit-interface" % "0.11",
   "org.apache.activemq" % "activemq-all" % "5.14.0"
